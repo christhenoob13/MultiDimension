@@ -1,128 +1,101 @@
 import {
-  world,
   system,
   Player,
-  BlockPermutation,
   CommandPermissionLevel,
   CustomCommandParamType
 } from '@minecraft/server';
 //import { ActionFormData } from '@minecraft/server-ui'
 
-import MultiDimension from './dimension.js';
+import VoidDimension from './dimension.js';
 import Command from "./commands.js";
 
+const MAX_DIMENSIONS = 20; // Maximum void dimension
+const namespace = "void"; // namespace for pack
 
-/*
-ADD MORE DIMENSION HERE
-*/
-const DIMENSIONS = [
-  MultiDimension.addDimension('arena'),
-  MultiDimension.addDimension('shop'),
-  MultiDimension.addDimension('event_area')
-]
-
-
-world.afterEvents.worldLoad.subscribe(() => {
-  for (const DMS of DIMENSIONS){
-    ensurePlatformBuild(DMS)
-  }
-})
-
-
-async function ensurePlatformBuild(dms){
-  const dimension = world.getDimension(dms.dimensionId);
-  const tickingId = dms.dimensionId;
-  await world.tickingAreaManager.createTickingArea(tickingId, {
-    dimension: dimension,
-    from: {
-      x: dms.spawnpoint.x - 10,
-      y: dms.spawnpoint.y - 2,
-      z: dms.spawnpoint.z - 10
-    },
-    to: {
-      x: dms.spawnpoint.x + 10,
-      y: dms.spawnpoint.y + 4,
-      z: dms.spawnpoint.z + 10
-    }
-  })
-  buildFloor(dimension, dms.spawnpoint);
-  world.tickingAreaManager.removeTickingArea(tickingId);
+/* Initialize voids */
+for (let i=0;i<MAX_DIMENSIONS;i++){
+  VoidDimension.create(`void:grieq${i+1}`);
 }
 
-function buildFloor(dimension, spawn){
-  const floor = BlockPermutation.resolve("minecraft:grass_block");
-  for (let x = -8; x <= 8; x++) {
-    for (let z = -8; z <= 8; z++) {
-      dimension.getBlock({ x: spawn.x + x, y: spawn.y-1, z: spawn.z + z })?.setPermutation(floor);
-    }
-  }
-}
-
-
-async function teleportToDimension(player, dimensionId){
-  const dms = DIMENSIONS.find(j => j.dimensionId === `${j.namespace}:${dimensionId}`);
-  const dimension = world.getDimension(dms.dimensionId);
-  const tickingId = `${dimensionId}_teleport`;
-  await world.tickingAreaManager.createTickingArea(tickingId, {
-    dimension: dimension,
-    from: {
-      x: dms.spawnpoint.x - 8,
-      y: dms.spawnpoint.y - 2,
-      z: dms.spawnpoint.z - 8
-    },
-    to: {
-      x: dms.spawnpoint.x + 8,
-      y: dms.spawnpoint.y + 4,
-      z: dms.spawnpoint.z + 8
-    }
-  })
-  player.teleport(dms.spawnpoint, { dimension });
-  world.tickingAreaManager.removeTickingArea(tickingId);
-}
-
-// Add enums
-Command.addEnum("choose:dimensions", MultiDimension.ids.map(Id => Id.split(':')[1]));
-
-// Add commands
 Command.add({
-  name: "dim:dimension",
-  description: "See all available custom dimensions",
+  name: `${namespace}:createvoid`,
+  description: "Create your own void dimension",
+  permissionLevel: CommandPermissionLevel.Any,
+  cheatsRequired: false,
+  mandatoryParameters: [
+    { name: "owner", type: CustomCommandParamType.PlayerSelector },
+    { name: "voidName", type: CustomCommandParamType.String },
+    { name: "secretPassword", type: CustomCommandParamType.String }
+  ]
+}, (origin, owner, voidName, password) => {
+  const commander = origin.sourceEntity;
+  
+  if (!(commander instanceof Player)) return;
+  if (owner.length > 1) return commander.sendMessage("§c[error] Please select only one player.");
+  if (password !== "GR33G") return commander.sendMessage("§c[error] Invalid secret password");
+  
+  const { success, message } = VoidDimension.ownVoid(owner[0], voidName);
+  commander.sendMessage(`${success ? '§a[success]':'§c[error]'} ${message}`);
+})
+Command.add({
+  name: `${namespace}:voids`,
+  description: "See all available void dimensions",
   permissionLevel: CommandPermissionLevel.Any,
   cheatsRequired: false
 }, (origin) => {
   const player = origin.sourceEntity;
   if (!(player instanceof Player)) return;
-  let message = "§7List name of all available custom dimension\n";
-  for (let i=0;i<MultiDimension.ids.length;i++){
-    message += `§7${i+1}. §6${MultiDimension.ids[i].split(':')[1]}\n`;
+  
+  const myVoids = VoidDimension.myVoids(player)
+  
+  let message = "§7List name of all available void dimension\n";
+  if (myVoids.length <= 0) {
+    message += "§c- No available void dimension\n";
+  }else{
+    for (let i=0;i<myVoids.length;i++){
+      message += `§7${i+1}. §6${myVoids[i]}\n`;
+    }
   }
-  message += "§7==================================\n";
-  message += "§7Type §r/tpdimension <dimensionName> §7to teleport";
+  message += "§7=============================\n";
+  message += "§7Type §r/tpvoid <voidName> §7to teleport";
   player.sendMessage(message)
 })
-
 Command.add({
-  name: "dim:tpdimension",
-  description: "Teleport to the custom dimension",
+  name: `${namespace}:tpvoid`,
+  description: "Teleport to the void dimension",
   permissionLevel: CommandPermissionLevel.Any,
   cheatsRequired: false,
   mandatoryParameters: [
-    { name: "choose:dimensions", type: CustomCommandParamType.Enum }
+    { name: `voidName`, type: CustomCommandParamType.String }
   ]
-}, (origin, dimensionId) => {
+}, (origin, voidName) => {
   const player = origin.sourceEntity;
   if (!(player instanceof Player)) return;
-  teleportToDimension(player, dimensionId)
+  
+  const data = VoidDimension.get_voids_data();
+  const Void = Object.values(data).find(el => el.name === voidName);
+    
+  // if void not available or invalid void name
+  if (!Void) return player.sendMessage("§c[error] Void name not found, enter §6/voids §cto see all your available void dimension")
+  
+  const isOwner = player.name === Void.owner;
+  const isAllowed = Void.allowlist.includes(player.name);
+  const isAdmin = player.getTags().includes("admin");
+  
+  if (!(isOwner || isAllowed || isAdmin)) {
+    return player.sendMessage("§6[warning] You don't have permission to access this void");
+  }
+  
+  system.run(()=>{VoidDimension.teleport(player, Void)});
 })
 
 
 system.beforeEvents.startup.subscribe(event => {
   
-  // register all dimension
-  MultiDimension.registerAll(event);
-  
   // register all commands
   Command.registerEnums(event);
   Command.registerCommands(event);
   
+  // register all dimension
+  VoidDimension.registerAll(event);
 })
